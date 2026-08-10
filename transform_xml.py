@@ -42,9 +42,12 @@ def clean_inner_html(raw_html):
 
 
 def remove_empty_containers(xml_str):
-    """Usuwa puste sekcje <colours> oraz <properties>, które wywołują błędy walidacji XSD Pigu."""
+    """Usuwa puste sekcje <colours> (w tym <colours/> i <colours  >) oraz <properties>."""
 
-    # 1. Usuwanie sekcji <colours>, jeśli nie zawierają przynajmniej jednego tagu <colour>
+    # 1. Usuwanie samozamykających się tagów <colours/> lub <colours />
+    xml_str = re.sub(r"<colours\b[^/>]*/>", "", xml_str, flags=re.IGNORECASE)
+
+    # 2. Usuwanie <colours ...> ... </colours>, jeśli w środku nie ma tagu <colour>
     def colours_filter(match):
         content = match.group(1)
         if "<colour" not in content:
@@ -52,12 +55,19 @@ def remove_empty_containers(xml_str):
         return match.group(0)
 
     xml_str = re.sub(
-        r"<colours>(.*?)</colours>", colours_filter, xml_str, flags=re.DOTALL
+        r"<colours\b[^>]*>(.*?)</colours>",
+        colours_filter,
+        xml_str,
+        flags=re.IGNORECASE | re.DOTALL,
     )
 
-    # 2. Usuwanie całkowicie pustych tagów <properties>
+    # 3. Usuwanie pustych tagów <properties/> oraz <properties> ... </properties>
+    xml_str = re.sub(r"<properties\b[^/>]*/>", "", xml_str, flags=re.IGNORECASE)
     xml_str = re.sub(
-        r"<properties>\s*</properties>", "", xml_str, flags=re.IGNORECASE
+        r"<properties\b[^>]*>\s*</properties>",
+        "",
+        xml_str,
+        flags=re.IGNORECASE | re.DOTALL,
     )
 
     return xml_str
