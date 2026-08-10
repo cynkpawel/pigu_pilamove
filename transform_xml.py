@@ -41,6 +41,28 @@ def clean_inner_html(raw_html):
     return encoded_str.strip()
 
 
+def remove_empty_containers(xml_str):
+    """Usuwa puste sekcje <colours> oraz <properties>, które wywołują błędy walidacji XSD Pigu."""
+
+    # 1. Usuwanie sekcji <colours>, jeśli nie zawierają przynajmniej jednego tagu <colour>
+    def colours_filter(match):
+        content = match.group(1)
+        if "<colour" not in content:
+            return ""
+        return match.group(0)
+
+    xml_str = re.sub(
+        r"<colours>(.*?)</colours>", colours_filter, xml_str, flags=re.DOTALL
+    )
+
+    # 2. Usuwanie całkowicie pustych tagów <properties>
+    xml_str = re.sub(
+        r"<properties>\s*</properties>", "", xml_str, flags=re.IGNORECASE
+    )
+
+    return xml_str
+
+
 def transform_xml():
     xml_text = ""
 
@@ -77,13 +99,17 @@ def transform_xml():
         pattern, replace_description_tag, xml_text, flags=re.DOTALL
     )
 
-    # Upewniamy się, że dla Estonii używamy końcówki -ee wymaganej przez Pigu XSD
+    # Zapewnienie poprawnych nazewnictw dla Estonii (-ee)
     transformed_xml = transformed_xml.replace(
         "<title-et>", "<title-ee>"
     ).replace("</title-et>", "</title-ee>")
     transformed_xml = transformed_xml.replace(
         "<long-description-et>", "<long-description-ee>"
     ).replace("</long-description-et>", "</long-description-ee>")
+
+    # Czyszczenie pustych kontenerów <colours> i <properties>
+    print("Czyszczenie pustych sekcji <colours> i <properties>...")
+    transformed_xml = remove_empty_containers(transformed_xml)
 
     print(f"Zapisywanie gotowego pliku do {OUTPUT_FILE}...")
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
