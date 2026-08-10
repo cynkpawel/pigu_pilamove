@@ -18,21 +18,17 @@ def clean_inner_html(raw_html):
     if not raw_html:
         return ""
 
-    # Odpowiednie odkodowanie wstępne
     raw_html = html.unescape(raw_html)
     soup = BeautifulSoup(raw_html, "html.parser")
 
-    # Usuwamy niepotrzebne tagi kontenerowe
     for tag in soup.find_all(["message-content", "section"]):
         tag.unwrap()
 
-    # Usuwamy atrybuty z tagów HTML (style, class, neue)
     for tag in soup.find_all(True):
         tag.attrs = {}
 
     cleaned_str = str(soup)
 
-    # Poprawka tagów br/hr
     cleaned_str = re.sub(
         r"<br\s*/?>", "<br/>", cleaned_str, flags=re.IGNORECASE
     )
@@ -40,8 +36,6 @@ def clean_inner_html(raw_html):
         r"<hr\s*/?>", "<hr/>", cleaned_str, flags=re.IGNORECASE
     )
 
-    # KODOWANIE ZNAKÓW < i > NA ENCJE (&lt; &gt;)
-    # Dzięki temu walidator XSD Pigu widzi opis jako 100% czysty ciąg tekstowy (xs:string)
     encoded_str = html.escape(cleaned_str, quote=False)
 
     return encoded_str.strip()
@@ -71,11 +65,9 @@ def transform_xml():
         tag_name = match.group(1)
         content = match.group(2)
 
-        # Usunięcie starych klocków CDATA
         content = re.sub(
             r"<!\[CDATA\[(.*?)\]\]>", r"\1", content, flags=re.DOTALL
         )
-
         cleaned_content = clean_inner_html(content)
 
         return f"<{tag_name}><![CDATA[{cleaned_content}]]></{tag_name}>"
@@ -85,13 +77,13 @@ def transform_xml():
         pattern, replace_description_tag, xml_text, flags=re.DOTALL
     )
 
-    # Zamiana nazwy tagu ee na et dla Estonii
+    # Upewniamy się, że dla Estonii używamy końcówki -ee wymaganej przez Pigu XSD
     transformed_xml = transformed_xml.replace(
-        "<title-ee>", "<title-et>"
-    ).replace("</title-ee>", "</title-et>")
+        "<title-et>", "<title-ee>"
+    ).replace("</title-et>", "</title-ee>")
     transformed_xml = transformed_xml.replace(
-        "<long-description-ee>", "<long-description-et>"
-    ).replace("</long-description-ee>", "</long-description-et>")
+        "<long-description-et>", "<long-description-ee>"
+    ).replace("</long-description-et>", "</long-description-ee>")
 
     print(f"Zapisywanie gotowego pliku do {OUTPUT_FILE}...")
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
