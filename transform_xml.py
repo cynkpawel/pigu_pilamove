@@ -75,7 +75,11 @@ def clean_inner_html(raw_html):
 
 def reorder_product_tags(product_xml_str):
     """Układa tagi wewnątrz <product> w ścisłej kolejności wymaganej przez schemat Pigu XSD."""
-    soup = BeautifulSoup(product_xml_str, "xml")
+    try:
+        soup = BeautifulSoup(product_xml_str, "xml")
+    except Exception:
+        soup = BeautifulSoup(product_xml_str, "html.parser")
+
     product_tag = soup.find("product")
     if not product_tag:
         return product_xml_str
@@ -86,7 +90,7 @@ def reorder_product_tags(product_xml_str):
         tag_name = child.name.lower()
         if tag_name in PIGU_TAG_ORDER:
             return PIGU_TAG_ORDER.index(tag_name)
-        return 999  # Pozostałe nieokreślone tagi trafiają na koniec
+        return 999
 
     sorted_children = sorted(children, key=get_sort_key)
 
