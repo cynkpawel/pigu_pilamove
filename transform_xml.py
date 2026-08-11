@@ -2,6 +2,7 @@ import html
 import os
 import re
 import sys
+import xml.etree.ElementTree as ET
 from bs4 import BeautifulSoup
 import requests
 
@@ -9,8 +10,8 @@ BASELINKER_XML_URL = "https://panel-f.baselinker.com/inventory_export.php?hash=a
 LOCAL_INPUT_FILE = "input_baselinker.xml"
 OUTPUT_FILE = "pigu.xml"
 
-# Ścisła kolejność tagów wymagana przez specyfikację Pigu XSD
-PIGU_TAG_ORDER = [
+# Ścisła, oficjalna sekwencja tagów Pigu XSD
+PIGU_OFFICIAL_ORDER = [
     "category-id",
     "category-name",
     "title",
@@ -48,8 +49,8 @@ PIGU_TAG_ORDER = [
 ]
 
 
-def clean_inner_html(raw_html):
-    """Czyści HTML z atrybutów i koduje znaki < oraz > na encje &lt; i &gt;"""
+def clean_html_content(raw_html):
+    """Czyści HTML z atrybutów (neue, style, class) i koduje znaki < oraz > na encje &lt; i &gt;"""
     if not raw_html:
         return ""
 
@@ -73,62 +74,6 @@ def clean_inner_html(raw_html):
     return html.escape(cleaned_str, quote=False).strip()
 
 
-def reorder_product_tags(product_xml_str):
-    """Układa tagi wewnątrz <product> w ścisłej kolejności wymaganej przez schemat Pigu XSD."""
-    try:
-        soup = BeautifulSoup(product_xml_str, "xml")
-    except Exception:
-        soup = BeautifulSoup(product_xml_str, "html.parser")
-
-    product_tag = soup.find("product")
-    if not product_tag:
-        return product_xml_str
-
-    children = [child for child in product_tag.children if child.name]
-
-    def get_sort_key(child):
-        tag_name = child.name.lower()
-        if tag_name in PIGU_TAG_ORDER:
-            return PIGU_TAG_ORDER.index(tag_name)
-        return 999
-
-    sorted_children = sorted(children, key=get_sort_key)
-
-    product_tag.clear()
-    for child in sorted_children:
-        product_tag.append(child)
-
-    return str(product_tag)
-
-
-def remove_empty_containers(xml_str):
-    """Usuwa puste sekcje <colours> oraz <properties>."""
-    xml_str = re.sub(r"<colours\b[^/>]*/>", "", xml_str, flags=re.IGNORECASE)
-
-    def colours_filter(match):
-        content = match.group(1)
-        if "<colour" not in content:
-            return ""
-        return match.group(0)
-
-    xml_str = re.sub(
-        r"<colours\b[^>]*>(.*?)</colours>",
-        colours_filter,
-        xml_str,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-
-    xml_str = re.sub(r"<properties\b[^/>]*/>", "", xml_str, flags=re.IGNORECASE)
-    xml_str = re.sub(
-        r"<properties\b[^>]*>\s*</properties>",
-        "",
-        xml_str,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-
-    return xml_str
-
-
 def transform_xml():
     xml_text = ""
 
@@ -147,7 +92,7 @@ def transform_xml():
             sys.exit(1)
         xml_text = response.text
 
-    print("Poprawianie nazewnictwa tagów (et -> ee)...")
+    print("Korekta kodów językowych (et -> ee)...")
     xml_text = (
         xml_text.replace("<title-et>", "<title-ee>")
         .replace("</title-et>", "</title-ee>")
@@ -157,40 +102,73 @@ def transform_xml():
         .replace("</usage-info-et>", "</usage-info-ee>")
     )
 
-    print("Transformacja opisów pod CDATA...")
+    print("Parsowanie drzewa XML za pomocą natywnego ElementTree...")
+    try:
+        root = ET.fromstring(xml_text)
+    except Exception as e:
+        print(f"Błąd parsowania XML: {e}")
+        sys.exit(1)
 
-    def replace_description_tag(match):
+    for product in root.findall("product"):
+        # 1. Czyszczenie opisów
+        for child in list(product):
+            if child.tag.startswith("long-description") and child.text:
+                text_content = re.sub(
+                    r"<!\[CDATA\[(.*?)\]\]>",
+                    r"\1",
+                    child.text,
+                    flags=re.DOTALL,
+                )
+                child.text = clean_html_content(text_content)
+
+        # 2. Usuwanie pustych kontenerów <colours> i <properties>
+        colours = product.find("colours")
+        if colours is not None:
+            if len(colours.findall("colour")) == 0:
+                product.remove(colours)
+
+        properties = product.find("properties")
+        if properties is not None:
+            if len(properties.findall("property")) == 0 and (
+                not properties.text or not properties.text.strip()
+            ):
+                product.remove(properties)
+
+        # 3. Ścisłe sortowanie tagów i odsiewanie nieznanych elementów
+        children = list(product)
+        for child in children:
+            product.remove(child)
+
+        valid_children = []
+        for child in children:
+            tag_name = child.tag.lower()
+            if tag_name in PIGU_OFFICIAL_ORDER:
+                valid_children.append(
+                    (PIGU_OFFICIAL_ORDER.index(tag_name), child)
+                )
+
+        valid_children.sort(key=lambda x: x[0])
+        for _, child in valid_children:
+            product.append(child)
+
+    print("Generowanie wyjściowego ciągu XML...")
+    xml_out = ET.tostring(root, encoding="utf-8").decode("utf-8")
+
+    # 4. Otaczanie tytułów i opisów blokami CDATA
+    def wrap_cdata(match):
         tag_name = match.group(1)
         content = match.group(2)
         content = re.sub(
             r"<!\[CDATA\[(.*?)\]\]>", r"\1", content, flags=re.DOTALL
         )
-        cleaned_content = clean_inner_html(content)
-        return f"<{tag_name}><![CDATA[{cleaned_content}]]></{tag_name}>"
+        return f"<{tag_name}><![CDATA[{content}]]></{tag_name}>"
 
-    pattern = r"<(long-description[a-zA-Z-]*)\b[^>]*>(.*?)</\1>"
-    xml_text = re.sub(
-        pattern, replace_description_tag, xml_text, flags=re.DOTALL
-    )
-
-    print("Sortowanie tagów wewnątrz <product> wg specyfikacji Pigu XSD...")
-
-    def process_product(match):
-        return reorder_product_tags(match.group(0))
-
-    xml_text = re.sub(
-        r"<product\b[^>]*>(.*?)</product>",
-        process_product,
-        xml_text,
-        flags=re.DOTALL,
-    )
-
-    print("Czyszczenie pustych sekcji <colours> i <properties>...")
-    xml_text = remove_empty_containers(xml_text)
+    cdata_pattern = r"<(title[a-zA-Z-]*|long-description[a-zA-Z-]*|category-name)\b[^>]*>(.*?)</\1>"
+    xml_out = re.sub(cdata_pattern, wrap_cdata, xml_out, flags=re.DOTALL)
 
     print(f"Zapisywanie gotowego pliku do {OUTPUT_FILE}...")
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        f.write(xml_text)
+        f.write(xml_out)
 
     print("Sukces! Plik wygenerowany pomyślnie.")
 
