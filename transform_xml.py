@@ -9,12 +9,47 @@ BASELINKER_XML_URL = "https://panel-f.baselinker.com/inventory_export.php?hash=a
 LOCAL_INPUT_FILE = "input_baselinker.xml"
 OUTPUT_FILE = "pigu.xml"
 
+# Ścisła kolejność tagów wymagana przez specyfikację Pigu XSD
+PIGU_TAG_ORDER = [
+    "category-id",
+    "category-name",
+    "title",
+    "title-ru",
+    "title-lv",
+    "title-ee",
+    "title-fi",
+    "title-en",
+    "title-pl",
+    "long-description",
+    "long-description-ru",
+    "long-description-lv",
+    "long-description-ee",
+    "long-description-fi",
+    "long-description-en",
+    "long-description-pl",
+    "usage-info",
+    "usage-info-lv",
+    "usage-info-ee",
+    "usage-info-ru",
+    "usage-info-fi",
+    "usage-info-en",
+    "supplier-code",
+    "barcodes",
+    "price",
+    "old-price",
+    "vat",
+    "stock",
+    "delivery-days",
+    "guarantee",
+    "brand",
+    "images",
+    "colours",
+    "properties",
+]
+
 
 def clean_inner_html(raw_html):
-    """Czyści HTML z atrybutów i koduje znaki < oraz > na encje &lt; i &gt;
-
-    wymagane przez walidator XSD Pigu.
-    """
+    """Czyści HTML z atrybutów i koduje znaki < oraz > na encje &lt; i &gt;"""
     if not raw_html:
         return ""
 
@@ -28,7 +63,6 @@ def clean_inner_html(raw_html):
         tag.attrs = {}
 
     cleaned_str = str(soup)
-
     cleaned_str = re.sub(
         r"<br\s*/?>", "<br/>", cleaned_str, flags=re.IGNORECASE
     )
@@ -36,18 +70,37 @@ def clean_inner_html(raw_html):
         r"<hr\s*/?>", "<hr/>", cleaned_str, flags=re.IGNORECASE
     )
 
-    encoded_str = html.escape(cleaned_str, quote=False)
+    return html.escape(cleaned_str, quote=False).strip()
 
-    return encoded_str.strip()
+
+def reorder_product_tags(product_xml_str):
+    """Układa tagi wewnątrz <product> w ścisłej kolejności wymaganej przez schemat Pigu XSD."""
+    soup = BeautifulSoup(product_xml_str, "xml")
+    product_tag = soup.find("product")
+    if not product_tag:
+        return product_xml_str
+
+    children = [child for child in product_tag.children if child.name]
+
+    def get_sort_key(child):
+        tag_name = child.name.lower()
+        if tag_name in PIGU_TAG_ORDER:
+            return PIGU_TAG_ORDER.index(tag_name)
+        return 999  # Pozostałe nieokreślone tagi trafiają na koniec
+
+    sorted_children = sorted(children, key=get_sort_key)
+
+    product_tag.clear()
+    for child in sorted_children:
+        product_tag.append(child)
+
+    return str(product_tag)
 
 
 def remove_empty_containers(xml_str):
-    """Usuwa puste sekcje <colours> (w tym <colours/> i <colours  >) oraz <properties>."""
-
-    # 1. Usuwanie samozamykających się tagów <colours/> lub <colours />
+    """Usuwa puste sekcje <colours> oraz <properties>."""
     xml_str = re.sub(r"<colours\b[^/>]*/>", "", xml_str, flags=re.IGNORECASE)
 
-    # 2. Usuwanie <colours ...> ... </colours>, jeśli w środku nie ma tagu <colour>
     def colours_filter(match):
         content = match.group(1)
         if "<colour" not in content:
@@ -61,7 +114,6 @@ def remove_empty_containers(xml_str):
         flags=re.IGNORECASE | re.DOTALL,
     )
 
-    # 3. Usuwanie pustych tagów <properties/> oraz <properties> ... </properties>
     xml_str = re.sub(r"<properties\b[^/>]*/>", "", xml_str, flags=re.IGNORECASE)
     xml_str = re.sub(
         r"<properties\b[^>]*>\s*</properties>",
@@ -91,39 +143,50 @@ def transform_xml():
             sys.exit(1)
         xml_text = response.text
 
-    print("Transformacja opisów pod walidację XSD Pigu...")
+    print("Poprawianie nazewnictwa tagów (et -> ee)...")
+    xml_text = (
+        xml_text.replace("<title-et>", "<title-ee>")
+        .replace("</title-et>", "</title-ee>")
+        .replace("<long-description-et>", "<long-description-ee>")
+        .replace("</long-description-et>", "</long-description-ee>")
+        .replace("<usage-info-et>", "<usage-info-ee>")
+        .replace("</usage-info-et>", "</usage-info-ee>")
+    )
+
+    print("Transformacja opisów pod CDATA...")
 
     def replace_description_tag(match):
         tag_name = match.group(1)
         content = match.group(2)
-
         content = re.sub(
             r"<!\[CDATA\[(.*?)\]\]>", r"\1", content, flags=re.DOTALL
         )
         cleaned_content = clean_inner_html(content)
-
         return f"<{tag_name}><![CDATA[{cleaned_content}]]></{tag_name}>"
 
     pattern = r"<(long-description[a-zA-Z-]*)\b[^>]*>(.*?)</\1>"
-    transformed_xml = re.sub(
+    xml_text = re.sub(
         pattern, replace_description_tag, xml_text, flags=re.DOTALL
     )
 
-    # Zapewnienie poprawnych nazewnictw dla Estonii (-ee)
-    transformed_xml = transformed_xml.replace(
-        "<title-et>", "<title-ee>"
-    ).replace("</title-et>", "</title-ee>")
-    transformed_xml = transformed_xml.replace(
-        "<long-description-et>", "<long-description-ee>"
-    ).replace("</long-description-et>", "</long-description-ee>")
+    print("Sortowanie tagów wewnątrz <product> wg specyfikacji Pigu XSD...")
 
-    # Czyszczenie pustych kontenerów <colours> i <properties>
+    def process_product(match):
+        return reorder_product_tags(match.group(0))
+
+    xml_text = re.sub(
+        r"<product\b[^>]*>(.*?)</product>",
+        process_product,
+        xml_text,
+        flags=re.DOTALL,
+    )
+
     print("Czyszczenie pustych sekcji <colours> i <properties>...")
-    transformed_xml = remove_empty_containers(transformed_xml)
+    xml_text = remove_empty_containers(xml_text)
 
     print(f"Zapisywanie gotowego pliku do {OUTPUT_FILE}...")
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        f.write(transformed_xml)
+        f.write(xml_text)
 
     print("Sukces! Plik wygenerowany pomyślnie.")
 
