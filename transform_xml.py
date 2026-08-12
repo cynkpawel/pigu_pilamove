@@ -10,8 +10,9 @@ BASELINKER_XML_URL = "https://panel-f.baselinker.com/inventory_export.php?hash=a
 LOCAL_INPUT_FILE = "input_baselinker.xml"
 OUTPUT_FILE = "pigu.xml"
 
-# Ścisła, oficjalna sekwencja tagów Pigu XSD
+# Ścisła, oficjalna sekwencja tagów Pigu XSD (supplier-code MUSI być na pierwszym miejscu)
 PIGU_OFFICIAL_ORDER = [
+    "supplier-code",
     "category-id",
     "category-name",
     "title",
@@ -34,7 +35,6 @@ PIGU_OFFICIAL_ORDER = [
     "usage-info-ru",
     "usage-info-fi",
     "usage-info-en",
-    "supplier-code",
     "barcodes",
     "price",
     "old-price",
@@ -102,7 +102,7 @@ def transform_xml():
         .replace("</usage-info-et>", "</usage-info-ee>")
     )
 
-    print("Parsowanie drzewa XML za pomocą natywnego ElementTree...")
+    print("Parsowanie drzewa XML...")
     try:
         root = ET.fromstring(xml_text)
     except Exception as e:
@@ -110,7 +110,7 @@ def transform_xml():
         sys.exit(1)
 
     for product in root.findall("product"):
-        # 1. Czyszczenie opisów
+        # 1. Czyszczenie opisów HTML
         for child in list(product):
             if child.tag.startswith("long-description") and child.text:
                 text_content = re.sub(
@@ -123,18 +123,21 @@ def transform_xml():
 
         # 2. Usuwanie pustych kontenerów <colours> i <properties>
         colours = product.find("colours")
-        if colours is not None:
-            if len(colours.findall("colour")) == 0:
-                product.remove(colours)
+        if colours is not None and len(colours.findall("colour")) == 0:
+            product.remove(colours)
 
         properties = product.find("properties")
-        if properties is not None:
-            if len(properties.findall("property")) == 0 and (
-                not properties.text or not properties.text.strip()
-            ):
+        if properties is not None and len(properties.findall("property")) == 0:
+            if not properties.text or not properties.text.strip():
                 product.remove(properties)
 
-        # 3. Ścisłe sortowanie tagów i odsiewanie nieznanych elementów
+        # 3. Usuwanie całkowicie pustych opcjonalnych pól (np. puste <title-pl/> lub <usage-info/>)
+        for child in list(product):
+            if len(child) == 0 and (not child.text or not child.text.strip()):
+                if child.tag not in ["barcodes", "images"]:
+                    product.remove(child)
+
+        # 4. Ścisłe sortowanie tagów wg PIGU_OFFICIAL_ORDER
         children = list(product)
         for child in children:
             product.remove(child)
@@ -154,7 +157,7 @@ def transform_xml():
     print("Generowanie wyjściowego ciągu XML...")
     xml_out = ET.tostring(root, encoding="utf-8").decode("utf-8")
 
-    # 4. Otaczanie tytułów i opisów blokami CDATA
+    # 5. Otaczanie tytułów, opisów i kategorii blokami CDATA
     def wrap_cdata(match):
         tag_name = match.group(1)
         content = match.group(2)
