@@ -1,4 +1,4 @@
-name: Automatyczny Generator Pigu XML
+name: Automatyczny Generator Pigu XML z API
 
 on:
   workflow_dispatch: # Wyłącznie ręczne uruchamianie przyciskiem
@@ -23,13 +23,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests beautifulsoup4 lxml
 
-      - name: Transformacja XML
-        run: python transform_xml.py
+      - name: Pobieranie danych z API BaseLinkera i generowanie XML
+        env:
+          BASELINKER_TOKEN: ${{ secrets.BASELINKER_TOKEN }}
+        run: python generate_from_api.py
 
       - name: Zapis i publikacja pliku pigu.xml na GitHubie
         run: |
           git config --global user.name "GitHub Action Bot"
           git config --global user.email "actions@github.com"
           git add pigu.xml
-          git commit -m "Jednorazowa generacja pigu.xml [skip ci]" || exit 0
+          git commit -m "Automatyczna generacja z API [skip ci]" || exit 0
           git push
