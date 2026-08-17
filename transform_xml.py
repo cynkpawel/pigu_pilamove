@@ -2,64 +2,29 @@ import html
 import os
 import re
 import sys
-import xml.etree.ElementTree as ET
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, CData
 import requests
 
 BASELINKER_XML_URL = "https://panel-f.baselinker.com/inventory_export.php?hash=aeddfc8c3f20ca1f0b644bd49df5d18c"
 LOCAL_INPUT_FILE = "input_baselinker.xml"
 OUTPUT_FILE = "pigu.xml"
 
-# Ścisła, oficjalna sekwencja tagów Pigu XSD (supplier-code MUSI być na pierwszym miejscu)
-PIGU_OFFICIAL_ORDER = [
-    "supplier-code",
-    "category-id",
-    "category-name",
-    "title",
-    "title-ru",
-    "title-lv",
-    "title-ee",
-    "title-fi",
-    "title-en",
-    "title-pl",
-    "long-description",
-    "long-description-ru",
-    "long-description-lv",
-    "long-description-ee",
-    "long-description-fi",
-    "long-description-en",
-    "long-description-pl",
-    "usage-info",
-    "usage-info-lv",
-    "usage-info-ee",
-    "usage-info-ru",
-    "usage-info-fi",
-    "usage-info-en",
-    "barcodes",
-    "price",
-    "old-price",
-    "vat",
-    "stock",
-    "delivery-days",
-    "guarantee",
-    "brand",
-    "images",
-    "colours",
-    "properties",
-]
-
 
 def clean_html_content(raw_html):
-    """Czyści HTML z atrybutów (neue, style, class) i koduje znaki < oraz > na encje &lt; i &gt;"""
+    """Czyści HTML ze zbędnych atrybutów oraz przestarzałych tagów <font> i <section>."""
     if not raw_html:
         return ""
 
-    raw_html = html.unescape(raw_html)
-    soup = BeautifulSoup(raw_html, "html.parser")
+    clean_str = html.unescape(raw_html)
+    clean_str = html.unescape(clean_str)
 
-    for tag in soup.find_all(["message-content", "section"]):
+    soup = BeautifulSoup(clean_str, "html.parser")
+
+    # Usuwamy niepotrzebne kontenery oraz tagi font
+    for tag in soup.find_all(["message-content", "section", "font"]):
         tag.unwrap()
 
+    # Usuwamy wszystkie atrybuty stylów i klas z pozostałych tagów
     for tag in soup.find_all(True):
         tag.attrs = {}
 
@@ -71,7 +36,7 @@ def clean_html_content(raw_html):
         r"<hr\s*/?>", "<hr/>", cleaned_str, flags=re.IGNORECASE
     )
 
-    return html.escape(cleaned_str, quote=False).strip()
+    return cleaned_str.strip()
 
 
 def transform_xml():
@@ -103,77 +68,64 @@ def transform_xml():
     )
 
     print("Parsowanie drzewa XML...")
-    try:
-        root = ET.fromstring(xml_text)
-    except Exception as e:
-        print(f"Błąd parsowania XML: {e}")
-        sys.exit(1)
+    soup = BeautifulSoup(xml_text, "xml")
 
-    for product in root.findall("product"):
-        # 1. Czyszczenie opisów HTML
-        for child in list(product):
-            if child.tag.startswith("long-description") and child.text:
-                text_content = re.sub(
-                    r"<!\[CDATA\[(.*?)\]\]>",
-                    r"\1",
-                    child.text,
-                    flags=re.DOTALL,
-                )
-                child.text = clean_html_content(text_content)
+    # 1. Czyszczenie opisów i pakowanie w CDATA
+    for tag in soup.find_all(re.compile(r"^long-description")):
+        raw_val = tag.get_text()
+        cleaned_html = clean_html_content(raw_val)
+        tag.string = CData(cleaned_html)
 
-        # 2. Usuwanie pustych kontenerów <colours> i <properties>
-        colours = product.find("colours")
-        if colours is not None and len(colours.findall("colour")) == 0:
-            product.remove(colours)
+    # 2. CDATA dla pozostałych pól tekstowych i kodów
+    cdata_target_tags = [
+        "supplier-code",
+        "barcode",
+        "category-name",
+        "brand",
+        "title",
+        "title-ru",
+        "title-lv",
+        "title-ee",
+        "title-fi",
+        "title-en",
+        "title-pl",
+    ]
+    for tag_name in cdata_target_tags:
+        for tag in soup.find_all(tag_name):
+            raw_val = tag.get_text().strip()
+            if raw_val:
+                clean_val = html.unescape(raw_val)
+                tag.string = CData(clean_val)
 
-        properties = product.find("properties")
-        if properties is not None and len(properties.findall("property")) == 0:
-            if not properties.text or not properties.text.strip():
-                product.remove(properties)
+    # 3. Usuwanie pustych kontenerów <colours> i <properties>
+    for colours in soup.find_all("colours"):
+        if not colours.find_all("colour"):
+            colours.decompose()
 
-        # 3. Usuwanie całkowicie pustych opcjonalnych pól (np. puste <title-pl/> lub <usage-info/>)
-        for child in list(product):
-            if len(child) == 0 and (not child.text or not child.text.strip()):
-                if child.tag not in ["barcodes", "images"]:
-                    product.remove(child)
+    for properties in soup.find_all("properties"):
+        if not properties.find_all("property") and not properties.get_text(
+            strip=True
+        ):
+            properties.decompose()
 
-        # 4. Ścisłe sortowanie tagów wg PIGU_OFFICIAL_ORDER
-        children = list(product)
-        for child in children:
-            product.remove(child)
+    print("Budowanie jednolitej deklaracji XML...")
+    xml_body = str(soup)
 
-        valid_children = []
-        for child in children:
-            tag_name = child.tag.lower()
-            if tag_name in PIGU_OFFICIAL_ORDER:
-                valid_children.append(
-                    (PIGU_OFFICIAL_ORDER.index(tag_name), child)
-                )
+    # Całkowite usuwanie wszystkich automatycznych deklaracji <?xml ...?> z ciągu
+    xml_body = re.sub(
+        r"^\s*<\?xml[^>]*\?>", "", xml_body, flags=re.MULTILINE
+    ).strip()
 
-        valid_children.sort(key=lambda x: x[0])
-        for _, child in valid_children:
-            product.append(child)
-
-    print("Generowanie wyjściowego ciągu XML...")
-    xml_out = ET.tostring(root, encoding="utf-8").decode("utf-8")
-
-    # 5. Otaczanie tytułów, opisów i kategorii blokami CDATA
-    def wrap_cdata(match):
-        tag_name = match.group(1)
-        content = match.group(2)
-        content = re.sub(
-            r"<!\[CDATA\[(.*?)\]\]>", r"\1", content, flags=re.DOTALL
-        )
-        return f"<{tag_name}><![CDATA[{content}]]></{tag_name}>"
-
-    cdata_pattern = r"<(title[a-zA-Z-]*|long-description[a-zA-Z-]*|category-name)\b[^>]*>(.*?)</\1>"
-    xml_out = re.sub(cdata_pattern, wrap_cdata, xml_out, flags=re.DOTALL)
+    # Dodanie JEDNEJ, prawidłowej deklaracji na samym początku pliku
+    final_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' + xml_body
+    )
 
     print(f"Zapisywanie gotowego pliku do {OUTPUT_FILE}...")
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        f.write(xml_out)
+        f.write(final_xml)
 
-    print("Sukces! Plik wygenerowany pomyślnie.")
+    print("Sukces! Plik wygenerowany poprawnie z pojedynczym nagłówkiem XML.")
 
 
 if __name__ == "__main__":
