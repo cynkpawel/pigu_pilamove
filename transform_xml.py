@@ -20,11 +20,9 @@ def clean_html_content(raw_html):
 
     soup = BeautifulSoup(clean_str, "html.parser")
 
-    # Usuwamy niepotrzebne kontenery oraz tagi font
     for tag in soup.find_all(["message-content", "section", "font"]):
         tag.unwrap()
 
-    # Usuwamy wszystkie atrybuty stylów i klas z pozostałych tagów
     for tag in soup.find_all(True):
         tag.attrs = {}
 
@@ -108,24 +106,23 @@ def transform_xml():
         ):
             properties.decompose()
 
-    print("Budowanie jednolitej deklaracji XML...")
+    print("Gwarantowanie pojedynczej deklaracji XML...")
     xml_body = str(soup)
 
-    # Całkowite usuwanie wszystkich automatycznych deklaracji <?xml ...?> z ciągu
-    xml_body = re.sub(
-        r"^\s*<\?xml[^>]*\?>", "", xml_body, flags=re.MULTILINE
-    ).strip()
+    # Bezwarunkowe usunięcie KAŻDEJ deklaracji <?xml ...?> z całości tekstu
+    xml_body = re.sub(r"<\?xml.*?\?>", "", xml_body, flags=re.DOTALL).strip()
 
-    # Dodanie JEDNEJ, prawidłowej deklaracji na samym początku pliku
+    # Dodanie jednej, czystej deklaracji na samym początku
     final_xml = (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' + xml_body
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        + xml_body
     )
 
     print(f"Zapisywanie gotowego pliku do {OUTPUT_FILE}...")
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         f.write(final_xml)
 
-    print("Sukces! Plik wygenerowany poprawnie z pojedynczym nagłówkiem XML.")
+    print("Sukces! Wygenerowano prawidłowy plik XML.")
 
 
 if __name__ == "__main__":
