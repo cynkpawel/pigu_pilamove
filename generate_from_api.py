@@ -37,7 +37,7 @@ def call_baselinker_api(method, parameters=None):
 
 
 def clean_html_text(raw_html):
-    """Czyszczenie kodu HTML opisu ze śmieciowych atrybutów, tagów font i section."""
+    """Czyszczenie kodu HTML opisu ze śmieciowych atrybutów i zbędnych tagów."""
     if not raw_html:
         return ""
 
@@ -60,74 +60,72 @@ def clean_html_text(raw_html):
 
 
 def build_pigu_xml(products_data):
-    """Buduje pełną strukturę XML wymaganą przez Pigu w prawidłowej sekwencji tagów XSD."""
+    """Buduje strukturę XML wymaganą przez Pigu."""
     root = ET.Element("products")
 
     for prod_id, p in products_data.items():
-        # Pobieramy główne zdjęcia produktu
+        # Pobieranie zdjęć
         main_images = p.get("images", {})
         main_image_urls = (
             list(main_images.values()) if isinstance(main_images, dict) else []
         )
 
-        # Pobieramy teksty / opisy
+        # Pobieranie opisów
         text_fields = p.get("text_fields", {})
         title_pl = text_fields.get("name", "")
         desc_pl = clean_html_text(text_fields.get("description", ""))
 
-        # Sprawdzamy warianty
+        # Sprawdzanie wariantów dla poprawnego EAN-u
         variants = p.get("variants", {})
-
         if not variants:
             variants_list = [{
                 "variant_id": prod_id,
-                "sku": p.get("sku", str(prod_id)),
                 "ean": p.get("ean", ""),
-                "price_brutto": p.get("prices", {}).get("1", 0),
-                "quantity": p.get("stock", {}).get("1", 0),
                 "images": main_image_urls,
             }]
         else:
             variants_list = list(variants.values())
 
-        # Tworzenie struktury <product> z zachowaniem wymogów Pigu XSD
+        ean_val = p.get("ean") or (variants_list[0].get("ean") if variants_list else "")
+
+        # --- BUDOWANIE ELEMENTU PRODUCT ---
         product_elem = ET.SubElement(root, "product")
 
-        # 1. Kategorie
+        # 1. supplier-code (BEZWZGLĘDNIE NA PIERWSZYM MIEJSCU)
+        # Zastępujemy błędne nazwy z SKU konkretnym kodem EAN lub numerycznym ID
+        supplier_code = ET.SubElement(product_elem, "supplier-code")
+        supplier_code.text = str(ean_val) if ean_val else str(prod_id)
+
+        # 2. category-id
         cat_id = ET.SubElement(product_elem, "category-id")
         cat_id.text = str(p.get("category_id", "1"))
 
+        # 3. category-name
         cat_name = ET.SubElement(product_elem, "category-name")
         cat_name.text = "Body"
 
-        # 2. Tytuł i Opis
+        # 4. title
         title_elem = ET.SubElement(product_elem, "title")
         title_elem.text = title_pl
 
+        # 5. long-description
         desc_elem = ET.SubElement(product_elem, "long-description")
         desc_elem.text = desc_pl
 
-        # 3. Kod dostawcy (supplier-code po opisie!)
-        supplier_code = ET.SubElement(product_elem, "supplier-code")
-        supplier_code.text = str(p.get("sku") or prod_id)
-
-        # 4. Kody kreskowe (EAN)
+        # 6. barcodes
         barcodes_elem = ET.SubElement(product_elem, "barcodes")
-        ean_val = p.get("ean") or (
-            variants_list[0].get("ean") if variants_list else ""
-        )
         if ean_val:
             barcode_item = ET.SubElement(barcodes_elem, "barcode")
             barcode_item.text = str(ean_val)
 
-        # 5. Ceny i Stany
+        # 7. price & stock
         price_elem = ET.SubElement(product_elem, "price")
         price_elem.text = str(p.get("prices", {}).get("1", 0))
 
         stock_elem = ET.SubElement(product_elem, "stock")
         stock_elem.text = str(p.get("stock", {}).get("1", 0))
 
-        # 6. Zdjęcia
+        # 8. images
         images_elem = ET.SubElement(product_elem, "images")
         prod_images = list(main_image_urls)
 
@@ -144,7 +142,7 @@ def build_pigu_xml(products_data):
                 img_tag = ET.SubElement(images_elem, "image")
                 img_tag.text = img_url
 
-    # Przetwarzanie i dodawanie CDATA
+    # --- PAKOWANIE W CDATA I GENEROWANIE CZYSTEGO KODU ---
     xml_str = ET.tostring(root, encoding="utf-8").decode("utf-8")
     soup = BeautifulSoup(xml_str, "xml")
 
@@ -155,7 +153,6 @@ def build_pigu_xml(products_data):
             if val:
                 tag.string = CData(val)
 
-    # Bezwarunkowe czyszczenie pod deklarację XML
     import re
     xml_body = str(soup)
     xml_body = re.sub(r"<\?xml.*?\?>", "", xml_body, flags=re.DOTALL)
