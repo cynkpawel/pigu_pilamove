@@ -12,7 +12,6 @@ API_URL = "https://api.baselinker.com/connector.php"
 
 
 def call_baselinker_api(method, parameters=None):
-    """Pomocnicza funkcja do zapytań do API BaseLinkera."""
     if not BASELINKER_TOKEN:
         print("CRITICAL ERROR: Brak BASELINKER_TOKEN w zmiennych środowiskowych!")
         sys.exit(1)
@@ -22,7 +21,6 @@ def call_baselinker_api(method, parameters=None):
         "method": method,
         "parameters": str(parameters or {}).replace("'", '"'),
     }
-
     response = requests.post(API_URL, data=payload)
     if response.status_code != 200:
         print(f"Błąd połączenia z API BaseLinker: {response.status_code}")
@@ -32,12 +30,11 @@ def call_baselinker_api(method, parameters=None):
     if data.get("status") == "ERROR":
         print(f"Błąd API BaseLinkera: {data.get('error_message')}")
         sys.exit(1)
-
     return data
 
 
 def clean_html_text(raw_html):
-    """Czyszczenie kodu HTML opisu ze śmieciowych atrybutów i zbędnych tagów."""
+    """Czyszczenie kodu HTML opisu ze śmieciowych atrybutów i tagów."""
     if not raw_html:
         return ""
 
@@ -60,89 +57,93 @@ def clean_html_text(raw_html):
 
 
 def build_pigu_xml(products_data):
-    """Buduje strukturę XML wymaganą przez Pigu."""
     root = ET.Element("products")
 
     for prod_id, p in products_data.items():
-        # Pobieranie zdjęć
         main_images = p.get("images", {})
-        main_image_urls = (
-            list(main_images.values()) if isinstance(main_images, dict) else []
-        )
+        main_image_urls = list(main_images.values()) if isinstance(main_images, dict) else []
 
-        # Pobieranie opisów
         text_fields = p.get("text_fields", {})
         title_pl = text_fields.get("name", "")
         desc_pl = clean_html_text(text_fields.get("description", ""))
 
-        # Sprawdzanie wariantów dla poprawnego EAN-u
         variants = p.get("variants", {})
+        main_price = p.get("prices", {}).get("1", 0)
+        main_stock = p.get("stock", {}).get("1", 0)
+        main_ean = p.get("ean", "")
+
         if not variants:
             variants_list = [{
                 "variant_id": prod_id,
-                "ean": p.get("ean", ""),
+                "sku": p.get("sku", str(prod_id)),
+                "ean": main_ean,
+                "price_brutto": main_price,
+                "quantity": main_stock,
                 "images": main_image_urls,
             }]
         else:
             variants_list = list(variants.values())
 
-        ean_val = p.get("ean") or (variants_list[0].get("ean") if variants_list else "")
-
-        # --- BUDOWANIE ELEMENTU PRODUCT ---
+        # Budowanie tagu <product>
         product_elem = ET.SubElement(root, "product")
 
-        # 1. supplier-code (BEZWZGLĘDNIE NA PIERWSZYM MIEJSCU)
-        # Zastępujemy błędne nazwy z SKU konkretnym kodem EAN lub numerycznym ID
-        supplier_code = ET.SubElement(product_elem, "supplier-code")
-        supplier_code.text = str(ean_val) if ean_val else str(prod_id)
-
-        # 2. category-id
         cat_id = ET.SubElement(product_elem, "category-id")
         cat_id.text = str(p.get("category_id", "1"))
 
-        # 3. category-name
         cat_name = ET.SubElement(product_elem, "category-name")
         cat_name.text = "Body"
 
-        # 4. title
         title_elem = ET.SubElement(product_elem, "title")
         title_elem.text = title_pl
 
-        # 5. long-description
         desc_elem = ET.SubElement(product_elem, "long-description")
         desc_elem.text = desc_pl
 
-        # 6. barcodes
-        barcodes_elem = ET.SubElement(product_elem, "barcodes")
-        if ean_val:
-            barcode_item = ET.SubElement(barcodes_elem, "barcode")
-            barcode_item.text = str(ean_val)
+        # --- OBOWIĄZKOWY BLOK WARIANTÓW (COLOURS -> MODIFICATIONS) ---
+        colours_elem = ET.SubElement(product_elem, "colours")
+        colour_elem = ET.SubElement(colours_elem, "colour")
+        modifications_elem = ET.SubElement(colour_elem, "modifications")
 
-        # 7. price & stock
-        price_elem = ET.SubElement(product_elem, "price")
-        price_elem.text = str(p.get("prices", {}).get("1", 0))
+        for v in variants_list:
+            modification_elem = ET.SubElement(modifications_elem, "modification")
 
-        stock_elem = ET.SubElement(product_elem, "stock")
-        stock_elem.text = str(p.get("stock", {}).get("1", 0))
+            # supplier-code (teraz w prawidłowym miejscu!)
+            sup_code = ET.SubElement(modification_elem, "supplier-code")
+            v_sku = v.get("sku") or v.get("ean") or str(v.get("variant_id"))
+            sup_code.text = str(v_sku)
 
-        # 8. images
-        images_elem = ET.SubElement(product_elem, "images")
-        prod_images = list(main_image_urls)
+            # barcodes
+            v_ean = v.get("ean") or main_ean
+            if v_ean:
+                barcodes_elem = ET.SubElement(modification_elem, "barcodes")
+                barcode_item = ET.SubElement(barcodes_elem, "barcode")
+                barcode_item.text = str(v_ean)
 
-        if not prod_images and variants_list:
-            for v in variants_list:
-                v_imgs = v.get("images", {})
+            # price & stock
+            price_elem = ET.SubElement(modification_elem, "price")
+            price_elem.text = str(v.get("price_brutto", main_price))
+
+            stock_elem = ET.SubElement(modification_elem, "stock")
+            stock_elem.text = str(v.get("quantity", main_stock))
+
+            # images
+            images_elem = ET.SubElement(modification_elem, "images")
+            v_images = list(main_image_urls)
+            if v.get("images"):
+                v_imgs = v.get("images")
                 if isinstance(v_imgs, dict):
-                    prod_images.extend(list(v_imgs.values()))
+                    v_images = list(v_imgs.values())
+                elif isinstance(v_imgs, list):
+                    v_images = v_imgs
 
-        for img_url in prod_images[:10]:
-            if img_url:
-                if not img_url.startswith("http"):
-                    img_url = "https://" + img_url
-                img_tag = ET.SubElement(images_elem, "image")
-                img_tag.text = img_url
+            for img_url in v_images[:10]:
+                if img_url:
+                    if not img_url.startswith("http"):
+                        img_url = "https://" + img_url
+                    img_tag = ET.SubElement(images_elem, "image")
+                    img_tag.text = img_url
 
-    # --- PAKOWANIE W CDATA I GENEROWANIE CZYSTEGO KODU ---
+    # --- CDATA i GENEROWANIE XML ---
     xml_str = ET.tostring(root, encoding="utf-8").decode("utf-8")
     soup = BeautifulSoup(xml_str, "xml")
 
@@ -165,43 +166,31 @@ def build_pigu_xml(products_data):
 def main():
     print("Pobieranie listy magazynów...")
     inv_res = call_baselinker_api("getInventories")
-    inventories = inv_res.get("inventories", [])
+    target_inv_id = inv_res["inventories"][0]["inventory_id"]
+    print(f"Wybrano magazyn: (ID: {target_inv_id})")
 
-    if not inventories:
-        print("Nie znaleziono żądnego magazynu w BaseLinkerze!")
-        sys.exit(1)
-
-    target_inv_id = inventories[0]["inventory_id"]
-    print(f"Wybrano magazyn: {inventories[0]['name']} (ID: {target_inv_id})")
-
-    print("Pobieranie listy ID produktów z API...")
     prod_list_res = call_baselinker_api(
         "getInventoryProductsList", {"inventory_id": target_inv_id}
     )
-    products_dict = prod_list_res.get("products", {})
-
-    product_ids = [int(pid) for pid in products_dict.keys()]
-    print(f"Znaleziono {len(product_ids)} produktów w API.")
+    product_ids = [int(pid) for pid in prod_list_res.get("products", {}).keys()]
 
     if not product_ids:
         print("Brak produktów w magazynie.")
         sys.exit(0)
 
-    print("Pobieranie szczegółowych danych o produktach...")
+    print("Pobieranie danych produktów...")
     products_data_res = call_baselinker_api(
         "getInventoryProductsData",
         {"inventory_id": target_inv_id, "products": product_ids[:500]},
     )
-
     full_products = products_data_res.get("products", {})
 
-    print("Generowanie wyjściowego pliku Pigu XML...")
+    print("Generowanie Pigu XML...")
     pigu_xml_output = build_pigu_xml(full_products)
 
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         f.write(pigu_xml_output)
-
-    print(f"Sukces! Wygenerowano plik {OUTPUT_FILE} na podstawie API.")
+    print(f"Sukces! Plik gotowy.")
 
 
 if __name__ == "__main__":
