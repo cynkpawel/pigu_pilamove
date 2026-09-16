@@ -71,6 +71,7 @@ def build_pigu_xml(products_data):
         main_stock = p.get("stock", {}).get("1", 0)
         main_ean = p.get("ean", "")
 
+        # Rozpłaszczamy warianty - każdy wariant to osobny <product>
         if not variants:
             variants_list = [{
                 "variant_id": prod_id,
@@ -83,57 +84,45 @@ def build_pigu_xml(products_data):
         else:
             variants_list = list(variants.values())
 
-        product_elem = ET.SubElement(root, "product")
-
-        cat_id = ET.SubElement(product_elem, "category-id")
-        cat_id.text = str(p.get("category_id", "1"))
-
-        cat_name = ET.SubElement(product_elem, "category-name")
-        cat_name.text = "Body"
-
-        title_elem = ET.SubElement(product_elem, "title")
-        title_elem.text = title_pl
-
-        desc_elem = ET.SubElement(product_elem, "long-description")
-        desc_elem.text = desc_pl
-
-        colours_elem = ET.SubElement(product_elem, "colours")
-        colour_elem = ET.SubElement(colours_elem, "colour")
-        modifications_elem = ET.SubElement(colour_elem, "modifications")
-
         for v in variants_list:
-            modification_elem = ET.SubElement(modifications_elem, "modification")
+            product_elem = ET.SubElement(root, "product")
 
-            # --- NOWE: Waga i wymiary (wymagane przez Pigu przed supplier-code) ---
-            # Pobieramy wymiary wariantu, jeśli nie ma - produktu głównego, jeśli nie ma - dajemy bezpieczny zapas (10cm, 0.1kg)
-            weight_val = v.get("weight") or p.get("weight") or 0.1
-            length_val = v.get("length") or p.get("length") or 10
-            height_val = v.get("height") or p.get("height") or 10
-            width_val = v.get("width") or p.get("width") or 10
-
-            ET.SubElement(modification_elem, "weight").text = str(weight_val)
-            ET.SubElement(modification_elem, "length").text = str(length_val)
-            ET.SubElement(modification_elem, "height").text = str(height_val)
-            ET.SubElement(modification_elem, "width").text = str(width_val)
-            # ----------------------------------------------------------------------
-
-            sup_code = ET.SubElement(modification_elem, "supplier-code")
+            # 1. supplier-code (NA SAMEJ GÓRZE)
+            sup_code = ET.SubElement(product_elem, "supplier-code")
             v_sku = v.get("sku") or v.get("ean") or str(v.get("variant_id"))
             sup_code.text = str(v_sku)
 
+            # 2. category-id i name
+            cat_id = ET.SubElement(product_elem, "category-id")
+            cat_id.text = str(p.get("category_id", "1"))
+
+            cat_name = ET.SubElement(product_elem, "category-name")
+            cat_name.text = "Body"
+
+            # 3. title-pl (Z SUFIKSEM JĘZYKA)
+            title_elem = ET.SubElement(product_elem, "title-pl")
+            title_elem.text = title_pl
+
+            # 4. long-description-pl (Z SUFIKSEM JĘZYKA)
+            desc_elem = ET.SubElement(product_elem, "long-description-pl")
+            desc_elem.text = desc_pl
+
+            # 5. barcodes
             v_ean = v.get("ean") or main_ean
             if v_ean:
-                barcodes_elem = ET.SubElement(modification_elem, "barcodes")
+                barcodes_elem = ET.SubElement(product_elem, "barcodes")
                 barcode_item = ET.SubElement(barcodes_elem, "barcode")
                 barcode_item.text = str(v_ean)
 
-            price_elem = ET.SubElement(modification_elem, "price")
+            # 6. price & stock
+            price_elem = ET.SubElement(product_elem, "price")
             price_elem.text = str(v.get("price_brutto", main_price))
 
-            stock_elem = ET.SubElement(modification_elem, "stock")
+            stock_elem = ET.SubElement(product_elem, "stock")
             stock_elem.text = str(v.get("quantity", main_stock))
 
-            images_elem = ET.SubElement(modification_elem, "images")
+            # 7. images
+            images_elem = ET.SubElement(product_elem, "images")
             v_images = list(main_image_urls)
             if v.get("images"):
                 v_imgs = v.get("images")
@@ -152,7 +141,8 @@ def build_pigu_xml(products_data):
     xml_str = ET.tostring(root, encoding="utf-8").decode("utf-8")
     soup = BeautifulSoup(xml_str, "xml")
 
-    cdata_tags = ["supplier-code", "barcode", "category-name", "title", "long-description"]
+    # CDATA dla zaktualizowanych tagów
+    cdata_tags = ["supplier-code", "category-name", "title-pl", "long-description-pl"]
     for tag_name in cdata_tags:
         for tag in soup.find_all(tag_name):
             val = tag.get_text().strip()
