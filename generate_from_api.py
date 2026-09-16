@@ -92,38 +92,8 @@ def build_pigu_xml(products_data):
         desc_elem = ET.SubElement(product_elem, "long-description")
         desc_elem.text = desc_pl
 
-        # --- BLOK WARIANTÓW (Musi być PRZED zdjęciami) ---
-        colours_elem = ET.SubElement(product_elem, "colours")
-        colour_elem = ET.SubElement(colours_elem, "colour")
-        modifications_elem = ET.SubElement(colour_elem, "modifications")
-
-        for v in variants_list:
-            modification_elem = ET.SubElement(modifications_elem, "modification")
-
-            # 1. Tytuł wariantu
-            mod_title = ET.SubElement(modification_elem, "modification-title")
-            v_name = v.get("name") or title_pl
-            mod_title.text = v_name
-
-            # 2. Wymiary i Waga
-            weight_val = v.get("weight") or p.get("weight") or 0.1
-            length_val = v.get("length") or p.get("length") or 10
-            height_val = v.get("height") or p.get("height") or 10
-            width_val = v.get("width") or p.get("width") or 10
-
-            ET.SubElement(modification_elem, "weight").text = str(weight_val)
-            ET.SubElement(modification_elem, "length").text = str(length_val)
-            ET.SubElement(modification_elem, "height").text = str(height_val)
-            ET.SubElement(modification_elem, "width").text = str(width_val)
-
-            # 3. Kody kreskowe paczki (EAN)
-            v_ean = v.get("ean") or main_ean
-            if v_ean:
-                pkg_barcode = ET.SubElement(modification_elem, "package-barcode")
-                pkg_barcode.text = str(v_ean)
-
-        # --- ZDJĘCIA NA POZIOMIE PRODUKTU (Na samym końcu struktury) ---
-        images_elem = ET.SubElement(product_elem, "images")
+        # --- GŁÓWNE ZDJĘCIA PRODUKTU (W TAGU MEDIA) ---
+        media_elem = ET.SubElement(product_elem, "media")
         
         prod_images = list(main_image_urls)
         if not prod_images and variants:
@@ -138,13 +108,57 @@ def build_pigu_xml(products_data):
             if img_url:
                 if not img_url.startswith("http"):
                     img_url = "https://" + img_url
-                img_tag = ET.SubElement(images_elem, "image")
+                img_tag = ET.SubElement(media_elem, "image")
                 img_tag.text = img_url
+
+        # --- ZAGNIEŻDŻONE WARIANTY ---
+        colours_elem = ET.SubElement(product_elem, "colours")
+        colour_elem = ET.SubElement(colours_elem, "colour")
+        modifications_elem = ET.SubElement(colour_elem, "modifications")
+
+        for v in variants_list:
+            modification_elem = ET.SubElement(modifications_elem, "modification")
+
+            mod_title = ET.SubElement(modification_elem, "modification-title")
+            v_name = v.get("name") or title_pl
+            mod_title.text = v_name
+
+            weight_val = v.get("weight") or p.get("weight") or 0.1
+            length_val = v.get("length") or p.get("length") or 10
+            height_val = v.get("height") or p.get("height") or 10
+            width_val = v.get("width") or p.get("width") or 10
+
+            ET.SubElement(modification_elem, "weight").text = str(weight_val)
+            ET.SubElement(modification_elem, "length").text = str(length_val)
+            ET.SubElement(modification_elem, "height").text = str(height_val)
+            ET.SubElement(modification_elem, "width").text = str(width_val)
+
+            v_ean = v.get("ean") or main_ean
+            if v_ean:
+                pkg_barcode = ET.SubElement(modification_elem, "package-barcode")
+                pkg_barcode.text = str(v_ean)
+
+            # --- ZDJĘCIA WARIANTU (W TAGU MEDIA) ---
+            mod_media_elem = ET.SubElement(modification_elem, "media")
+            v_images = list(main_image_urls)
+            if v.get("images"):
+                v_imgs = v.get("images")
+                if isinstance(v_imgs, dict):
+                    v_images = list(v_imgs.values())
+                elif isinstance(v_imgs, list):
+                    v_images = v_imgs
+
+            for img_url in v_images[:10]:
+                if img_url:
+                    if not img_url.startswith("http"):
+                        img_url = "https://" + img_url
+                    img_tag = ET.SubElement(mod_media_elem, "image")
+                    img_tag.text = img_url
 
     xml_str = ET.tostring(root, encoding="utf-8").decode("utf-8")
     soup = BeautifulSoup(xml_str, "xml")
 
-    # CDATA dla pól tekstowych i kodów
+    # CDATA
     cdata_tags = ["package-barcode", "category-name", "title", "long-description", "modification-title"]
     for tag_name in cdata_tags:
         for tag in soup.find_all(tag_name):
