@@ -72,7 +72,6 @@ def build_pigu_xml(products_data):
         if not variants:
             variants_list = [{
                 "variant_id": prod_id,
-                "sku": p.get("sku", str(prod_id)),
                 "ean": main_ean,
                 "images": main_image_urls,
                 "name": title_pl
@@ -94,6 +93,7 @@ def build_pigu_xml(products_data):
         desc_elem = ET.SubElement(product_elem, "long-description")
         desc_elem.text = desc_pl
 
+        # --- ZAGNIEŻDŻONE WARIANTY (BEZ SKU, CENY I STANU) ---
         colours_elem = ET.SubElement(product_elem, "colours")
         colour_elem = ET.SubElement(colours_elem, "colour")
         modifications_elem = ET.SubElement(colour_elem, "modifications")
@@ -101,17 +101,12 @@ def build_pigu_xml(products_data):
         for v in variants_list:
             modification_elem = ET.SubElement(modifications_elem, "modification")
 
-            # 1. supplier-code (PIERWSZY ELEMENT WARIANTU)
-            sup_code = ET.SubElement(modification_elem, "supplier-code")
-            v_sku = v.get("sku") or v.get("ean") or str(v.get("variant_id"))
-            sup_code.text = str(v_sku)
-
-            # 2. modification-title
+            # 1. Tytuł wariantu
             mod_title = ET.SubElement(modification_elem, "modification-title")
             v_name = v.get("name") or title_pl
             mod_title.text = v_name
 
-            # 3. Logistyka (Wymiary)
+            # 2. Wymiary i Waga
             weight_val = v.get("weight") or p.get("weight") or 0.1
             length_val = v.get("length") or p.get("length") or 10
             height_val = v.get("height") or p.get("height") or 10
@@ -122,13 +117,13 @@ def build_pigu_xml(products_data):
             ET.SubElement(modification_elem, "height").text = str(height_val)
             ET.SubElement(modification_elem, "width").text = str(width_val)
 
-            # 4. Kody kreskowe paczki
+            # 3. Kody kreskowe paczki (EAN)
             v_ean = v.get("ean") or main_ean
             if v_ean:
                 pkg_barcode = ET.SubElement(modification_elem, "package-barcode")
                 pkg_barcode.text = str(v_ean)
 
-            # 5. Zdjęcia wariantu
+            # 4. Zdjęcia wariantu
             images_elem = ET.SubElement(modification_elem, "images")
             v_images = list(main_image_urls)
             if v.get("images"):
@@ -148,7 +143,8 @@ def build_pigu_xml(products_data):
     xml_str = ET.tostring(root, encoding="utf-8").decode("utf-8")
     soup = BeautifulSoup(xml_str, "xml")
 
-    cdata_tags = ["supplier-code", "package-barcode", "category-name", "title", "long-description", "modification-title"]
+    # CDATA dla pól tekstowych i kodów
+    cdata_tags = ["package-barcode", "category-name", "title", "long-description", "modification-title"]
     for tag_name in cdata_tags:
         for tag in soup.find_all(tag_name):
             val = tag.get_text().strip()
