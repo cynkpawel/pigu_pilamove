@@ -73,7 +73,6 @@ def build_pigu_xml(products_data):
             variants_list = [{
                 "variant_id": prod_id,
                 "ean": main_ean,
-                "images": main_image_urls,
                 "name": title_pl
             }]
         else:
@@ -93,7 +92,27 @@ def build_pigu_xml(products_data):
         desc_elem = ET.SubElement(product_elem, "long-description")
         desc_elem.text = desc_pl
 
-        # --- ZAGNIEŻDŻONE WARIANTY (BEZ SKU, CENY I STANU) ---
+        # --- ZDJĘCIA NA POZIOMIE PRODUKTU ---
+        images_elem = ET.SubElement(product_elem, "images")
+        
+        # Zebranie zdjęć z produktu lub wariantów
+        prod_images = list(main_image_urls)
+        if not prod_images and variants:
+            for v in variants_list:
+                v_imgs = v.get("images", {})
+                if isinstance(v_imgs, dict):
+                    prod_images.extend(list(v_imgs.values()))
+                elif isinstance(v_imgs, list):
+                    prod_images.extend(v_imgs)
+
+        for img_url in prod_images[:10]:
+            if img_url:
+                if not img_url.startswith("http"):
+                    img_url = "https://" + img_url
+                img_tag = ET.SubElement(images_elem, "image")
+                img_tag.text = img_url
+
+        # --- ZAGNIEŻDŻONE WARIANTY (Tylko dane wariantu) ---
         colours_elem = ET.SubElement(product_elem, "colours")
         colour_elem = ET.SubElement(colours_elem, "colour")
         modifications_elem = ET.SubElement(colour_elem, "modifications")
@@ -122,23 +141,6 @@ def build_pigu_xml(products_data):
             if v_ean:
                 pkg_barcode = ET.SubElement(modification_elem, "package-barcode")
                 pkg_barcode.text = str(v_ean)
-
-            # 4. Zdjęcia wariantu
-            images_elem = ET.SubElement(modification_elem, "images")
-            v_images = list(main_image_urls)
-            if v.get("images"):
-                v_imgs = v.get("images")
-                if isinstance(v_imgs, dict):
-                    v_images = list(v_imgs.values())
-                elif isinstance(v_imgs, list):
-                    v_images = v_imgs
-
-            for img_url in v_images[:10]:
-                if img_url:
-                    if not img_url.startswith("http"):
-                        img_url = "https://" + img_url
-                    img_tag = ET.SubElement(images_elem, "image")
-                    img_tag.text = img_url
 
     xml_str = ET.tostring(root, encoding="utf-8").decode("utf-8")
     soup = BeautifulSoup(xml_str, "xml")
