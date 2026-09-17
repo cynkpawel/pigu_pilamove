@@ -113,24 +113,30 @@ def build_pigu_xml(products_data):
             ET.SubElement(modification_elem, "height").text = str(height_val)
             ET.SubElement(modification_elem, "width").text = str(width_val)
 
-            # 3. Kod paczki (EAN)
+            # 3. Kody kreskowe paczki (EAN)
             v_ean = v.get("ean") or main_ean
             if v_ean:
                 pkg_barcode = ET.SubElement(modification_elem, "package-barcode")
                 pkg_barcode.text = str(v_ean)
 
-            # 4. Atrybuty wariantu - TUTAJ WKLEJAMY SUPPLIER-CODE!
+            # 4. Atrybuty - Pigu wymaga i supplier-code, i manufacturer-code!
             attr_elem = ET.SubElement(modification_elem, "attributes")
             
             sup_code = ET.SubElement(attr_elem, "supplier-code")
             v_sku = v.get("sku") or v.get("ean") or str(v.get("variant_id"))
             sup_code.text = str(v_sku)
 
+            mfg_code = ET.SubElement(attr_elem, "manufacturer-code")
+            mfg_code.text = str(v_sku)  # Powielamy SKU jako kod producenta
+
     xml_str = ET.tostring(root, encoding="utf-8").decode("utf-8")
     soup = BeautifulSoup(xml_str, "xml")
 
-    # CDATA dla pól tekstowych i supplier-code
-    cdata_tags = ["package-barcode", "supplier-code", "category-name", "title", "long-description", "modification-title"]
+    # CDATA
+    cdata_tags = [
+        "package-barcode", "category-name", "title", "long-description", 
+        "modification-title", "supplier-code", "manufacturer-code"
+    ]
     for tag_name in cdata_tags:
         for tag in soup.find_all(tag_name):
             val = tag.get_text().strip()
