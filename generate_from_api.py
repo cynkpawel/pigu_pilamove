@@ -89,7 +89,6 @@ def build_pigu_xml(products_data):
         desc_elem = ET.SubElement(product_elem, "long-description")
         desc_elem.text = desc_pl
 
-        # --- ZAGNIEŻDŻONE WARIANTY (Tylko dane katalogowe i kody EAN, BEZ ZDJĘĆ) ---
         colours_elem = ET.SubElement(product_elem, "colours")
         colour_elem = ET.SubElement(colours_elem, "colour")
         modifications_elem = ET.SubElement(colour_elem, "modifications")
@@ -118,6 +117,9 @@ def build_pigu_xml(products_data):
             if v_ean:
                 pkg_barcode = ET.SubElement(modification_elem, "package-barcode")
                 pkg_barcode.text = str(v_ean)
+
+            # 4. Atrybuty (Oczekiwane przez walidator przed zamknięciem modification)
+            ET.SubElement(modification_elem, "attributes")
 
     xml_str = ET.tostring(root, encoding="utf-8").decode("utf-8")
     soup = BeautifulSoup(xml_str, "xml")
