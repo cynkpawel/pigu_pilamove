@@ -52,7 +52,7 @@ def clean_html_text(raw_html):
     cleaned_str = re.sub(r"<br\s*/?>", "<br/>", cleaned_str, flags=re.IGNORECASE)
     cleaned_str = re.sub(r"<hr\s*/?>", "<hr/>", cleaned_str, flags=re.IGNORECASE)
 
-    # Oczyszczanie "ryzykownych słów" zgłaszanych przez autocheck Pigu
+    # Oczyszczanie ryzykownych słów (np. fiński autocheck)
     cleaned_str = re.sub(r"helvetica", "sans-serif", cleaned_str, flags=re.IGNORECASE)
 
     return cleaned_str.strip()
@@ -61,7 +61,6 @@ def clean_html_text(raw_html):
 def build_pigu_xml(products_data):
     root = ET.Element("products")
 
-    # Słownik przyporządkowujący kody języków z BaseLinkera do końcówek tagów w Pigu
     lang_mapping = {
         'lt': 'lt', 'lit': 'lt',
         'lv': 'lv', 'lav': 'lv',
@@ -72,12 +71,10 @@ def build_pigu_xml(products_data):
     }
 
     for prod_id, p in products_data.items():
-        # Pobieranie polskiego (domyślnego) tekstu
         text_fields = p.get("text_fields", {})
         title_pl = text_fields.get("name", "")
         desc_pl = clean_html_text(text_fields.get("description", ""))
 
-        # Pobieranie tłumaczeń
         raw_translations = p.get("translations", {})
         parsed_translations = {}
         for bl_lang, t_data in raw_translations.items():
@@ -87,6 +84,11 @@ def build_pigu_xml(products_data):
                 t_name = t_data.get("name", "")
                 t_desc = clean_html_text(t_data.get("description", ""))
                 parsed_translations[p_lang] = {"name": t_name, "desc": t_desc}
+
+        # Wyciągamy tłumaczenie LT jako wiodące (bazowe)
+        lt_trans = parsed_translations.get('lt', {})
+        base_title = lt_trans.get("name") or title_pl
+        base_desc = lt_trans.get("desc") or desc_pl
 
         variants = p.get("variants", {})
         main_ean = p.get("ean", "")
@@ -103,27 +105,22 @@ def build_pigu_xml(products_data):
 
         product_elem = ET.SubElement(root, "product")
 
-        cat_id = ET.SubElement(product_elem, "category-id")
-        cat_id.text = str(p.get("category_id", "1"))
+        ET.SubElement(product_elem, "category-id").text = str(p.get("category_id", "1"))
+        ET.SubElement(product_elem, "category-name").text = "Body"
 
-        cat_name = ET.SubElement(product_elem, "category-name")
-        cat_name.text = "Body"
+        # --- GŁÓWNE TYTUŁY (Wymagana ścisła kolejność XSD) ---
+        ET.SubElement(product_elem, "title").text = base_title
+        for lang in ['ru', 'lv', 'ee', 'fi', 'en']:
+            if lang in parsed_translations and parsed_translations[lang]["name"]:
+                ET.SubElement(product_elem, f"title-{lang}").text = parsed_translations[lang]["name"]
+        ET.SubElement(product_elem, "title-pl").text = title_pl
 
-        # Tagi dla wersji PL
-        title_elem = ET.SubElement(product_elem, "title-pl")
-        title_elem.text = title_pl
-
-        desc_elem = ET.SubElement(product_elem, "long-description-pl")
-        desc_elem.text = desc_pl
-
-        # Dynamiczne dodawanie przetłumaczonych tytułów i opisów produktu
-        for p_lang, t_vals in parsed_translations.items():
-            if t_vals["name"]:
-                t_elem = ET.SubElement(product_elem, f"title-{p_lang}")
-                t_elem.text = t_vals["name"]
-            if t_vals["desc"]:
-                d_elem = ET.SubElement(product_elem, f"long-description-{p_lang}")
-                d_elem.text = t_vals["desc"]
+        # --- GŁÓWNE OPISY ---
+        ET.SubElement(product_elem, "long-description").text = base_desc
+        for lang in ['ru', 'lv', 'ee', 'fi', 'en']:
+            if lang in parsed_translations and parsed_translations[lang]["desc"]:
+                ET.SubElement(product_elem, f"long-description-{lang}").text = parsed_translations[lang]["desc"]
+        ET.SubElement(product_elem, "long-description-pl").text = desc_pl
 
         colours_elem = ET.SubElement(product_elem, "colours")
         colour_elem = ET.SubElement(colours_elem, "colour")
@@ -132,18 +129,17 @@ def build_pigu_xml(products_data):
         for v in variants_list:
             modification_elem = ET.SubElement(modifications_elem, "modification")
 
-            # Tytuł modyfikacji w wersji PL
-            mod_title = ET.SubElement(modification_elem, "modification-title-pl")
+            # --- TYTUŁY WARIANTÓW (Brak obsługi -pl, używamy tylko dozwolonych) ---
             v_name = v.get("name") or title_pl
-            mod_title.text = v_name
+            mod_base_title = lt_trans.get("name") or v_name
+            
+            ET.SubElement(modification_elem, "modification-title").text = mod_base_title
+            
+            for lang in ['ru', 'lv', 'ee', 'fi']:
+                if lang in parsed_translations and parsed_translations[lang]["name"]:
+                    ET.SubElement(modification_elem, f"modification-title-{lang}").text = parsed_translations[lang]["name"]
 
-            # Tytuły modyfikacji w pozostałych językach (powielamy przetłumaczony tytuł główny)
-            for p_lang, t_vals in parsed_translations.items():
-                if t_vals["name"]:
-                    mt_elem = ET.SubElement(modification_elem, f"modification-title-{p_lang}")
-                    mt_elem.text = t_vals["name"]
-
-            # Wymiary i Waga
+            # Reszta logistyki
             weight_val = v.get("weight") or p.get("weight") or 0.1
             length_val = v.get("length") or p.get("length") or 10
             height_val = v.get("height") or p.get("height") or 10
@@ -154,36 +150,29 @@ def build_pigu_xml(products_data):
             ET.SubElement(modification_elem, "height").text = str(height_val)
             ET.SubElement(modification_elem, "width").text = str(width_val)
 
-            # Kod paczki (EAN)
             v_ean = v.get("ean") or main_ean
             if v_ean:
-                pkg_barcode = ET.SubElement(modification_elem, "package-barcode")
-                pkg_barcode.text = str(v_ean)
+                ET.SubElement(modification_elem, "package-barcode").text = str(v_ean)
 
-            # Atrybuty
             attr_elem = ET.SubElement(modification_elem, "attributes")
             
-            sup_code = ET.SubElement(attr_elem, "supplier-code")
             v_sku = v.get("sku") or v.get("ean") or str(v.get("variant_id"))
-            sup_code.text = str(v_sku)
-
-            mfg_code = ET.SubElement(attr_elem, "manufacturer-code")
-            mfg_code.text = str(v_sku)
+            ET.SubElement(attr_elem, "supplier-code").text = str(v_sku)
+            ET.SubElement(attr_elem, "manufacturer-code").text = str(v_sku)
 
             if v_ean:
                 barcodes_elem = ET.SubElement(attr_elem, "barcodes")
-                barcode_item = ET.SubElement(barcodes_elem, "barcode")
-                barcode_item.text = str(v_ean)
+                ET.SubElement(barcodes_elem, "barcode").text = str(v_ean)
 
     xml_str = ET.tostring(root, encoding="utf-8").decode("utf-8")
     soup = BeautifulSoup(xml_str, "xml")
 
-    # CDATA musi obejmować wszystkie możliwe warianty językowe
-    cdata_tags = [
-        "package-barcode", "category-name", "supplier-code", "manufacturer-code", "barcode"
-    ]
-    for lang in ['pl', 'lt', 'lv', 'ee', 'fi', 'en', 'ru']:
-        cdata_tags.extend([f"title-{lang}", f"long-description-{lang}", f"modification-title-{lang}"])
+    # CDATA musi obejmować wszystkie możliwe tagi językowe
+    cdata_tags = ["package-barcode", "category-name", "supplier-code", "manufacturer-code", "barcode"]
+    for ext in ['', '-ru', '-lv', '-ee', '-fi', '-en', '-pl']:
+        cdata_tags.extend([f"title{ext}", f"long-description{ext}"])
+    for ext in ['', '-ru', '-lv', '-ee', '-fi']:
+        cdata_tags.append(f"modification-title{ext}")
 
     for tag_name in cdata_tags:
         for tag in soup.find_all(tag_name):
