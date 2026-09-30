@@ -32,10 +32,7 @@ def call_baselinker_api(method, parameters=None):
     return data
 
 def fix_caps(text):
-    """
-    Sprawdza, czy cały tekst jest pisany WIELKIMI LITERAMI. 
-    Jeśli tak, zamienia go na format zdaniowy (Pierwsza litera wielka).
-    """
+    """Zamienia wielkie litery na prawidłowy format zdaniowy, zgodnie z wytycznymi Pigu."""
     if not text:
         return text
     if text.isupper():
@@ -67,21 +64,38 @@ def clean_html_text(raw_html):
 def build_pigu_xml(products_data):
     root = ET.Element("products")
 
+    bl_to_pigu = {
+        'lt': 'lt', 'lit': 'lt',
+        'lv': 'lv', 'lav': 'lv',
+        'et': 'ee', 'ee': 'ee', 'est': 'ee',
+        'fi': 'fi', 'fin': 'fi',
+        'en': 'en', 'eng': 'en',
+        'ru': 'ru', 'rus': 'ru'
+    }
+
     for prod_id, p in products_data.items():
         text_fields = p.get("text_fields", {})
         title_pl = fix_caps(text_fields.get("name", ""))
         desc_pl = clean_html_text(text_fields.get("description", ""))
 
-        parsed_translations = p.get("translations", {})
-        
-        # Wyciągamy LT jako bazowy (z zabezpieczeniem CAPS)
-        lt_trans = parsed_translations.get('lt', {})
-        base_title = fix_caps(lt_trans.get("name")) or title_pl
-        base_desc = lt_trans.get("desc") or desc_pl
+        # Czysty odczyt tłumaczeń prosto z jednego zapytania
+        raw_translations = p.get("translations", {})
+        parsed_translations = {}
+        for bl_lang, t_data in raw_translations.items():
+            lang_key = bl_lang.lower()
+            if lang_key in bl_to_pigu:
+                p_lang = bl_to_pigu[lang_key]
+                t_name = fix_caps(t_data.get("name", ""))
+                t_desc = clean_html_text(t_data.get("description", ""))
+                parsed_translations[p_lang] = {"name": t_name, "desc": t_desc}
 
-        # Zapasowy opis np. po angielsku, przydatny dla pustych rynków
-        en_desc = parsed_translations.get('en', {}).get('desc') or desc_pl
-        en_title = fix_caps(parsed_translations.get('en', {}).get('name')) or title_pl
+        # BAZA PIGU (Litwa)
+        lt_title = parsed_translations.get('lt', {}).get("name") or title_pl
+        lt_desc = parsed_translations.get('lt', {}).get("desc") or desc_pl
+
+        # FALLBACK (Angielski) - w razie braków dla Łotwy i Estonii
+        en_title = parsed_translations.get('en', {}).get("name") or title_pl
+        en_desc = parsed_translations.get('en', {}).get("desc") or desc_pl
 
         variants = p.get("variants", {})
         main_ean = p.get("ean", "")
@@ -102,27 +116,21 @@ def build_pigu_xml(products_data):
         ET.SubElement(product_elem, "category-name").text = "Body"
 
         # --- TYTUŁY ---
-        ET.SubElement(product_elem, "title").text = base_title
+        ET.SubElement(product_elem, "title").text = lt_title
         for lang in ['ru', 'lv', 'ee', 'fi', 'en']:
-            lang_title = fix_caps(parsed_translations.get(lang, {}).get("name"))
-            
-            # Wymuszony fallback dla LV i EE na angielski/polski, aby uniknąć braku danych
+            lang_title = parsed_translations.get(lang, {}).get("name")
             if not lang_title and lang in ['lv', 'ee']:
                 lang_title = en_title
-                
             if lang_title:
                 ET.SubElement(product_elem, f"title-{lang}").text = lang_title
         ET.SubElement(product_elem, "title-pl").text = title_pl
 
         # --- OPISY ---
-        ET.SubElement(product_elem, "long-description").text = base_desc
+        ET.SubElement(product_elem, "long-description").text = lt_desc
         for lang in ['ru', 'lv', 'ee', 'fi', 'en']:
             lang_desc = parsed_translations.get(lang, {}).get("desc")
-            
-            # Wymuszony fallback dla LV i EE
             if not lang_desc and lang in ['lv', 'ee']:
                 lang_desc = en_desc
-                
             if lang_desc:
                 ET.SubElement(product_elem, f"long-description-{lang}").text = lang_desc
         ET.SubElement(product_elem, "long-description-pl").text = desc_pl
@@ -135,11 +143,13 @@ def build_pigu_xml(products_data):
             modification_elem = ET.SubElement(modifications_elem, "modification")
 
             v_name = fix_caps(v.get("name")) or title_pl
-            mod_base_title = fix_caps(lt_trans.get("name")) or v_name
-            ET.SubElement(modification_elem, "modification-title").text = mod_base_title
+            
+            # Tytuł wariantu (Litwa)
+            mod_lt_title = parsed_translations.get('lt', {}).get("name") or v_name
+            ET.SubElement(modification_elem, "modification-title").text = mod_lt_title
             
             for lang in ['ru', 'lv', 'ee', 'fi']:
-                lang_mod_title = fix_caps(parsed_translations.get(lang, {}).get("name"))
+                lang_mod_title = parsed_translations.get(lang, {}).get("name")
                 if not lang_mod_title and lang in ['lv', 'ee']:
                     lang_mod_title = en_title
                 if lang_mod_title:
@@ -197,12 +207,7 @@ def main():
     inv_res = call_baselinker_api("getInventories")
     target_inv = inv_res["inventories"][0]
     target_inv_id = target_inv["inventory_id"]
-    
-    available_langs = target_inv.get("languages")
-    if not available_langs:
-        available_langs = ['pl', 'lt', 'lv', 'et', 'fi', 'en', 'ru']
-
-    print(f"Wybrano magazyn: (ID: {target_inv_id}), Dostępne języki: {available_langs}")
+    print(f"Wybrano magazyn: (ID: {target_inv_id})")
 
     prod_list_res = call_baselinker_api(
         "getInventoryProductsList", {"inventory_id": target_inv_id}
@@ -213,40 +218,20 @@ def main():
         print("Brak produktów w magazynie.")
         sys.exit(0)
 
-    print("Pobieranie danych produktów (język domyślny PL)...")
+    print("Pobieranie danych produktów z BaseLinkera...")
     products_data_res = call_baselinker_api(
         "getInventoryProductsData",
         {"inventory_id": target_inv_id, "products": product_ids[:500]},
     )
     full_products = products_data_res.get("products", {})
-    
-    for pid in full_products:
-        full_products[pid]["translations"] = {}
 
-    bl_to_pigu_lang_map = {
-        'lt': 'lt',
-        'lv': 'lv',
-        'et': 'ee', 'ee': 'ee',
-        'fi': 'fi',
-        'en': 'en',
-        'ru': 'ru'
-    }
-
-    for bl_lang in available_langs:
-        if bl_lang.lower() in bl_to_pigu_lang_map:
-            pigu_lang = bl_to_pigu_lang_map[bl_lang.lower()]
-            print(f"Pobieranie tłumaczeń API dla języka: {bl_lang} (Mapowane na Pigu: {pigu_lang})...")
-            
-            lang_res = call_baselinker_api(
-                "getInventoryProductsData",
-                {"inventory_id": target_inv_id, "products": product_ids[:500], "language": bl_lang},
-            )
-            
-            for pid, pdata in lang_res.get("products", {}).items():
-                if pid in full_products:
-                    t_name = pdata.get("text_fields", {}).get("name", "")
-                    t_desc = clean_html_text(pdata.get("text_fields", {}).get("description", ""))
-                    full_products[pid]["translations"][pigu_lang] = {"name": t_name, "desc": t_desc}
+    # DEBUG - Sprawdzenie czy BaseLinker faktycznie zwraca nam języki!
+    if full_products:
+        sample_prod = list(full_products.values())[0]
+        found_langs = list(sample_prod.get("translations", {}).keys())
+        print(f"\n--- INFO DIAGNOSTYCZNE ---")
+        print(f"Tłumaczenia wykryte w systemie dla produktu: {found_langs}")
+        print(f"--------------------------\n")
 
     print("Generowanie Pigu XML...")
     pigu_xml_output = build_pigu_xml(full_products)
