@@ -27,6 +27,7 @@ jobs:
         env:
           BASELINKER_TOKEN: ${{ secrets.BASELINKER_TOKEN }}
         run: python generate_from_api.py
+        python generate_offers.py
 
       - name: Zapis i publikacja pliku pigu.xml na GitHubie
         run: |
