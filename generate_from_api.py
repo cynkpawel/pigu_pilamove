@@ -44,7 +44,34 @@ def to_meters(cm_val):
     except:
         return "0.10"
 
-def build_pigu_xml(products_data, categories_map):
+def assign_category(title):
+    """
+    Automatycznie przydziela ID i nazwę kategorii z wytycznych Pilamove 
+    na podstawie słów kluczowych w polskim tytule produktu.
+    """
+    t = title.lower()
+    
+    # Odzież damska
+    if any(x in t for x in ['body', 'kombinezon', 'spódniczka', 'sukienka', 'top', 'spodenki', 'kolarki', 'dzwony', 'legginsy', 'komplet']):
+        return "1001", "Drabužiai moterims"
+        
+    # Akcesoria damskie
+    elif any(x in t for x in ['torba', 'nerka']):
+        return "1002", "Aksesuarai moterims"
+        
+    # Skrzynia do reformera
+    elif 'skrzynia' in t:
+        return "1003", "Laisvalaikis"
+        
+    # Sprzęt fitness / Urządzenia
+    elif any(x in t for x in ['stepper', 'trenażer', 'motylek', 'dysk', 'mata', 'reformer', 'deska']):
+        return "1004", "Treniruokliai"
+        
+    # Kategoria domyślna dla sportu
+    else:
+        return "1005", "Sporto prekės"
+
+def build_pigu_xml(products_data):
     root = ET.Element("products")
     bl_to_pigu = {
         'lt': 'lt', 'lv': 'lv', 'et': 'ee', 'ee': 'ee',
@@ -70,7 +97,6 @@ def build_pigu_xml(products_data, categories_map):
                     elif field_type == "description":
                         parsed_translations[pigu_lang]["desc"] = clean_html_text(value)
 
-        # Fallbacki
         lt_title = parsed_translations.get('lt', {}).get("name") or title_pl
         lt_desc = parsed_translations.get('lt', {}).get("desc") or desc_pl
         en_title = parsed_translations.get('en', {}).get("name") or title_pl
@@ -85,11 +111,11 @@ def build_pigu_xml(products_data, categories_map):
 
         product_elem = ET.SubElement(root, "product")
 
-        cat_id_val = str(p.get("category_id", "0"))
+        # AUTOMATYCZNE PRZYPISANIE KATEGORII Z PDF
+        cat_id_val, cat_name_val = assign_category(title_pl)
         ET.SubElement(product_elem, "category-id").text = cat_id_val
-        ET.SubElement(product_elem, "category-name").text = categories_map.get(cat_id_val, "Uncategorized")
+        ET.SubElement(product_elem, "category-name").text = cat_name_val
 
-        # Tytuły i Opisy (Tylko obsługiwane języki, BEZ -pl)
         ET.SubElement(product_elem, "title").text = lt_title
         for lang in ['ru', 'lv', 'ee', 'fi', 'en']:
             lang_title = parsed_translations.get(lang, {}).get("name") or (en_title if lang in ['lv', 'ee'] else "")
@@ -103,7 +129,6 @@ def build_pigu_xml(products_data, categories_map):
         colours_elem = ET.SubElement(product_elem, "colours")
         colour_elem = ET.SubElement(colours_elem, "colour")
 
-        # ZDJĘCIA DOKŁADNIE WEDŁUG WYTYCZNYCH (w colour, przed modifications)
         main_images = p.get("images", {})
         main_image_urls = list(main_images.values()) if isinstance(main_images, dict) else []
         if main_image_urls:
@@ -126,7 +151,6 @@ def build_pigu_xml(products_data, categories_map):
                 lang_mod_title = parsed_translations.get(lang, {}).get("name") or (en_title if lang in ['lv', 'ee'] else "")
                 if lang_mod_title: ET.SubElement(modification_elem, f"modification-title-{lang}").text = lang_mod_title
 
-            # Wymiary zamienione na metry
             weight_val = v.get("weight") or p.get("weight") or 0.1
             ET.SubElement(modification_elem, "weight").text = str(weight_val)
             ET.SubElement(modification_elem, "length").text = to_meters(v.get("length") or p.get("length") or 10)
@@ -136,7 +160,6 @@ def build_pigu_xml(products_data, categories_map):
             v_ean = v.get("ean") or main_ean
             if v_ean: ET.SubElement(modification_elem, "package-barcode").text = str(v_ean)
 
-            # Atrybuty w poprawnej kolejności
             attr_elem = ET.SubElement(modification_elem, "attributes")
             if v_ean:
                 barcodes_elem = ET.SubElement(attr_elem, "barcodes")
@@ -169,10 +192,6 @@ def main():
     inv_res = call_baselinker_api("getInventories")
     target_inv_id = inv_res["inventories"][0]["inventory_id"]
     
-    # Pobieranie mapy kategorii z BaseLinkera
-    cat_res = call_baselinker_api("getInventoryCategories", {"inventory_id": target_inv_id})
-    categories_map = {str(c['category_id']): c['name'] for c in cat_res.get('categories', [])}
-
     prod_list_res = call_baselinker_api("getInventoryProductsList", {"inventory_id": target_inv_id})
     product_ids = [int(pid) for pid in prod_list_res.get("products", {}).keys()]
     if not product_ids: return
@@ -182,7 +201,7 @@ def main():
         {"inventory_id": target_inv_id, "products": product_ids[:500]},
     )
     
-    pigu_xml_output = build_pigu_xml(products_data_res.get("products", {}), categories_map)
+    pigu_xml_output = build_pigu_xml(products_data_res.get("products", {}))
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         f.write(pigu_xml_output)
 
